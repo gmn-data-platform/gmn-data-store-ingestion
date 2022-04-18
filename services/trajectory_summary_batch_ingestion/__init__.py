@@ -1,0 +1,1 @@
+"""Trajectory Summary Batch Ingestion."""

@@ -1,0 +1,14 @@
+version: '3.3'
+
+services:
+  trajectory_summary_mock_stream_ingestion:
+    image: .
+    restart: always
+    volumes:
+      - ./main.py:/app/main.py
+    networks:
+      - gmn_data_platform_network
+
+networks:
+  gmn_data_platform_network:
+    name: gmn_data_platform_network

@@ -1,0 +1,7 @@
+logs/
+/services/trajectory_summary_batch_ingestion/extracted_data/
+
+.env
+
+# Ignore IDE files
+.idea/*

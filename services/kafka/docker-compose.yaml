@@ -1,0 +1,162 @@
+version: '3.3'
+
+services:
+  kafka-init:
+    build: kafka_init/
+    environment:
+      - KAFKA_BROKER_URL=kafka-broker:29092
+      - SCHEMA_REGISTRY_URL=schema-registry:8081
+      - KSQLDB_SERVER_URL=ksqldb-server:8088
+      - ELASTICSEARCH_URL=elasticsearch:9200
+      - ELASTICSEARCH_KAFKA_CONNECT_URL=kafka-connect-01:8083
+    volumes:
+      - ./kafka_init:/kafka_init
+    depends_on:
+      - kafka-broker
+      - ksqldb-server
+      - schema-registry
+    networks:
+      - gmn_data_platform_network
+    profiles:
+      - init
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.2.0
+    restart: always
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:
+        2000
+    networks:
+      - gmn_data_platform_network
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.0.1
+    hostname: schema-registry
+    restart: always
+    depends_on:
+      - zookeeper
+      - kafka-broker
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka-broker:29092'
+    networks:
+      - gmn_data_platform_network
+
+  kafka-broker:
+    image: confluentinc/cp-kafka:6.2.0
+    restart: always
+    ports:
+      # To learn about configuring Kafka for access across networks see
+      # https://www.confluent.io/blog/kafka-client-cannot-connect-to-broker-on-aws-on-docker-etc/
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka-broker:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
+    networks:
+      - gmn_data_platform_network
+
+  ksqldb-server:
+    image: confluentinc/ksqldb-server:0.23.1
+    hostname: ksqldb-server
+    depends_on:
+      - zookeeper
+      - kafka-broker
+      - schema-registry
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_KSQL_CONNECT_URL: http://kafka-connect-01:8083
+      KSQL_BOOTSTRAP_SERVERS: kafka-broker:29092
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+      KSQL_CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      KSQL_CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      KSQL_CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      KSQL_CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+    networks:
+      - gmn_data_platform_network
+
+  ksqldb-cli:
+    image: confluentinc/ksqldb-cli:0.23.1
+    depends_on:
+      - kafka-broker
+      - ksqldb-server
+    entrypoint: /bin/sh
+    tty: true
+    networks:
+      - gmn_data_platform_network
+    profiles:
+      - debug
+
+  kafka-connect-01:
+    image: confluentinc/cp-kafka-connect-base:6.2.0
+    depends_on:
+      - kafka-broker
+      - schema-registry
+    links:
+      - schema-registry
+      - kafka-broker
+    ports:
+      - 8083:8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka-broker:29092
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect-01"
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect-01
+      CONNECT_CONFIG_STORAGE_TOPIC: _kafka-connect-01-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _kafka-connect-01-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _kafka-connect-01-status
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+      CONNECT_LOG4J_APPENDER_STDOUT_LAYOUT_CONVERSIONPATTERN: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+    command:
+      - bash
+      - -c
+      - |
+        # Nasty hack for ECS
+        echo '127.0.0.1 kafka-connect-01' >> /etc/hosts
+        #
+        echo "Installing connector plugins"
+        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:11.1.1
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        #
+        echo "Waiting for Kafka Connect to start listening on localhost ⏳"
+        while : ; do
+          curl_status=$$(curl -s -o /dev/null -w %{http_code} http://localhost:8083/connectors)
+          echo -e $$(date) " Kafka Connect listener HTTP state: " $$curl_status " (waiting for 200)"
+          if [ $$curl_status -eq 200 ] ; then
+            break
+          fi
+          sleep 5
+        done
+        sleep infinity
+    networks:
+      - gmn_data_platform_network
+
+networks:
+  gmn_data_platform_network:
+    name: gmn_data_platform_network

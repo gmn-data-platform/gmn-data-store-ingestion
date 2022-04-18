@@ -1,0 +1,21 @@
+version: '3.3'
+
+services:
+  kafka-db-sink:
+    build: .
+    environment:
+      - KAFKA_BROKER_URL=kafka-broker:29092
+      - SCHEMA_REGISTRY_URL=schema-registry:8081
+    volumes:
+      - ./:/kafka_database_sink
+      - gmn_data_store:/root/.gmn_data_store
+    networks:
+      - gmn_data_platform_network
+
+volumes:
+  gmn_data_store:
+    external: true
+
+networks:
+  gmn_data_platform_network:
+    name: gmn_data_platform_network

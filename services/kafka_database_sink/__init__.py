@@ -1,0 +1,1 @@
+"""Kafka Database Sink."""
