@@ -1,24 +1,21 @@
 """Airflow script to produce trajectory summary data."""
 import json
-import tempfile
 from datetime import timedelta, datetime
 import os
 
+import confluent_kafka
 from airflow.operators.python import get_current_context, PythonOperator
 from airflow.utils.dates import days_ago
 from airflow.decorators import dag
 
-import confluent_kafka.avro
 from confluent_kafka.avro import AvroProducer
 
 from gmn_python_api.data_directory import DATA_START_DATE
 from gmn_python_api.data_directory import get_daily_file_content_by_date
-from gmn_python_api.trajectory_summary_reader import \
-    read_trajectory_summary_as_dataframe
-from gmn_python_api.trajectory_summary_schema import get_trajectory_summary_avro_schema, \
-    _MODEL_TRAJECTORY_SUMMARY_FILE_PATH
+from gmn_python_api.meteor_summary_reader import \
+    read_meteor_summary_csv_as_dataframe
+from gmn_python_api.meteor_summary_schema import get_meteor_summary_avro_schema
 from gmn_python_api import get_all_file_content
-import gmn_python_api
 
 EXTRACTED_DATA_DIRECTORY = '~/extracted_data'
 """Directory that stores raw trajectory summary files after getting them using the
@@ -96,29 +93,6 @@ def delivery_trajectory_summary(err, msg) -> None:
         print('Message delivered to {} [{}]'.format(msg.topic(), msg.partition()))
 
 
-def get_avro_schema():
-    # TODO: replace with this fix
-    #  https://github.com/gmn-data-platform/gmn-python-api/issues/115
-    import pandavro as pdx  # type: ignore
-    from avro.datafile import DataFileReader  # type: ignore
-    from avro.io import DatumReader  # type: ignore
-
-    _, avro_file_path = tempfile.mkstemp()
-
-    data_frame = gmn_python_api.read_trajectory_summary_as_dataframe(
-        _MODEL_TRAJECTORY_SUMMARY_FILE_PATH,
-        avro_compatible=True,
-        avro_long_beginning_utc_time=False,
-    )
-
-    pdx.to_avro(avro_file_path, data_frame)
-    pdx.read_avro(avro_file_path)
-
-    reader = DataFileReader(open(avro_file_path, "rb"), DatumReader())
-    schema = json.loads(reader.meta["avro.schema"].decode())
-    return confluent_kafka.avro.loads(json.dumps(dict(schema)))
-
-
 def trajectory_summary_daily_ingest(day_offset: int = 0) -> None:
     """
     Load a trajectory summary file from the data directory into kafka using the
@@ -146,21 +120,22 @@ def trajectory_summary_daily_ingest(day_offset: int = 0) -> None:
         context['logical_date'],
         context['execution_date'],
         file_content)
-
-    trajectory_df = read_trajectory_summary_as_dataframe(extracted_file_path,
-                                                         avro_compatible=True)
+    trajectory_df = read_meteor_summary_csv_as_dataframe(extracted_file_path,
+                                                         avro_compatible=True,
+                                                         csv_data_directory_format=True)
+    print(trajectory_df.columns.values)
     print(f"Shape of the data = {trajectory_df.shape}\n")
 
-    avro_schema = get_avro_schema()
+    avro_schema = get_meteor_summary_avro_schema()
 
     avroProducer = AvroProducer({
         'bootstrap.servers': 'kafka-broker:29092',
         'on_delivery': delivery_trajectory_summary,
         'schema.registry.url': 'http://schema-registry:8081'
-    }, default_value_schema=avro_schema)
+    }, default_value_schema=confluent_kafka.avro.loads(json.dumps(avro_schema)))
 
     for index, row in trajectory_df.iterrows():
-        row_dict = dict(row.to_dict())
+        row_dict = row.to_dict()
         print(f"Sending index {index}, row = {row_dict} to kafka")
         avroProducer.produce(topic=TRAJECTORY_SUMMARY_TOPIC_NAME, value=row_dict,
                              key=None)
@@ -189,20 +164,23 @@ def trajectory_summary_historical_ingest() -> None:
         context['execution_date'],
         file_content)
 
-    trajectory_df = read_trajectory_summary_as_dataframe(extracted_file_path,
-                                                         avro_compatible=True)
+    trajectory_df = read_meteor_summary_csv_as_dataframe(extracted_file_path,
+                                                         avro_compatible=True,
+                                                         csv_data_directory_format=True)
     print(f"Shape of the data = {trajectory_df.shape}\n")
+
+    avro_schema = get_meteor_summary_avro_schema()
 
     avroProducer = AvroProducer({
         'bootstrap.servers': 'kafka-broker:29092',
         'on_delivery': delivery_trajectory_summary,
         'schema.registry.url': 'http://schema-registry:8081'
-    }, default_key_schema=None,
-        default_value_schema=get_trajectory_summary_avro_schema())
+    }, default_value_schema=confluent_kafka.avro.loads(json.dumps(avro_schema)))
 
     for index, row in trajectory_df.iterrows():
-        print(f"Sending index {index}, row = {row.to_dict()} to kafka")
-        avroProducer.produce(topic=TRAJECTORY_SUMMARY_TOPIC_NAME, value=row.to_dict(),
+        row_dict = row.to_dict()
+        print(f"Sending index {index}, row = {row_dict} to kafka")
+        avroProducer.produce(topic=TRAJECTORY_SUMMARY_TOPIC_NAME, value=row_dict,
                              key=None)
         avroProducer.poll(0)
         print(f"Successfully sent index {index}")

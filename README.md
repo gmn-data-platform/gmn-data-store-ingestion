@@ -29,6 +29,7 @@ More info: https://github.com/gmn-data-platform/gmn-data-platform
 
 ## Usage
 ```sh
+make build_all_services
 make init_all_services
 make run_all_services
 ```

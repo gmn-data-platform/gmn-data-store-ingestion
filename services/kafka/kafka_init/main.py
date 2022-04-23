@@ -1,6 +1,6 @@
 """
 Script for setting up Kafka. Sets up topics, saves Avro schemas in the Kafka Schema
- Registry and sets up Elasticsearch kafka connector.
+ Registry and sets up Elasticsearch Kafka connector.
 """
 import json
 import argparse
@@ -11,15 +11,13 @@ from ksql import KSQLAPI
 
 from confluent_kafka.admin import AdminClient
 from confluent_kafka.cimpl import NewTopic
-from gmn_python_api.trajectory_summary_schema import get_trajectory_summary_avro_schema
+from gmn_python_api.meteor_summary_schema import get_meteor_summary_avro_schema
 from confluent_kafka.schema_registry import SchemaRegistryClient, Schema, \
     SchemaRegistryError
 from requests.exceptions import ConnectionError
 
 TRAJECTORY_SUMMARY_TOPIC_NAME = "trajectory_summary_raw"
 TRAJECTORY_SUMMARY_SUBJECT_NAME = TRAJECTORY_SUMMARY_TOPIC_NAME + "-value"
-DEBEZIUM_TABLE_TOPIC_NAMES = ["db.public.iau_shower", "db.public.station",
-                              "db.public.participating_station", "db.public.trajectory"]
 
 
 def setup_kafka_topics(kafka_broker_url):
@@ -33,13 +31,10 @@ def setup_kafka_topics(kafka_broker_url):
 
     main_topics = [NewTopic(topic, num_partitions=3, replication_factor=1) for topic in
                    [TRAJECTORY_SUMMARY_TOPIC_NAME]]
-    debezium_topics = [NewTopic(topic, num_partitions=1, replication_factor=1) for topic
-                       in
-                       DEBEZIUM_TABLE_TOPIC_NAMES]
 
     # Call create_topics to asynchronously create topics. A dict
     # of <topic,future> is returned.
-    fs = a.create_topics(main_topics + debezium_topics)
+    fs = a.create_topics(main_topics)
 
     # Wait for each operation to finish.
     for topic, f in fs.items():
@@ -51,7 +46,7 @@ def setup_kafka_topics(kafka_broker_url):
 
 
 def setup_schema_registry(schema_registry_url):
-    schema = get_trajectory_summary_avro_schema()
+    schema = get_meteor_summary_avro_schema()
     avro_schema = Schema(json.dumps(schema), 'AVRO')
 
     schema_registry_client = SchemaRegistryClient({
@@ -114,7 +109,7 @@ def setup_kafka_with_ksql(ksqldb_server_url, schema_registry_url, elasticsearch_
       'value.converter.schema.registry.url' = '{"http://" + schema_registry_url}',
       'tasks.max'                           = '1',
       'type.name'                           = '_doc',
-      'topics'                              = 'trajectory_summary_raw,db.public.trajectory,db.public.iau_shower,db.public.station,db.public.participating_station',
+      'topics'                              = '{TRAJECTORY_SUMMARY_TOPIC_NAME}',
       'key.ignore'                          = 'true',
       'schema.ignore'                       = 'true',
       'schema.enable'                       = 'false',

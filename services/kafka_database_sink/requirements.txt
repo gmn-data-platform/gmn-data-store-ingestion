@@ -1,4 +1,4 @@
 confluent_kafka[avro]==1.8.2
-gmn-python-api==0.0.4
+gmn-python-api==0.0.5
 ksql==0.10.2
-git+https://github.com/gmn-data-platform/gmn-data-store.git
+gmn-data-store==0.0.2
